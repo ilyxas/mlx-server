@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 try:
     import mlx_lm  # type: ignore[import-untyped]
     from mlx_lm import load as mlx_load, generate as mlx_generate  # type: ignore[import-untyped]
-    from mlx_lm.utils import stream_generate as mlx_stream_generate  # type: ignore[import-untyped]
+    from mlx_lm.utils import (  # type: ignore[import-untyped]
+        stream_generate as mlx_stream_generate,
+        make_prompt_cache as mlx_make_prompt_cache,
+    )
 
     _MLX_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -52,13 +55,21 @@ class MlxRuntime:
         self._tokenizer = None
         self._current_repo = None
 
+    def create_prompt_cache(self) -> Any:
+        """Create a fresh prompt cache for the currently loaded model."""
+        if not self.is_loaded:
+            raise RuntimeError("No model loaded.")
+        if not _MLX_AVAILABLE:  # pragma: no cover
+            return None
+        return mlx_make_prompt_cache(self._model)
+
     def generate(
         self,
         prompt: str,
         max_tokens: int = 300,
         temperature: float = 0.7,
         top_p: float = 1.0,
-        stop: list[str] | None = None,
+        prompt_cache: Any = None,
     ) -> str:
         """Generate text synchronously."""
         if not self.is_loaded:
@@ -73,6 +84,7 @@ class MlxRuntime:
             max_tokens=max_tokens,
             temp=temperature,
             top_p=top_p,
+            prompt_cache=prompt_cache,
         )
         return result
 
@@ -82,7 +94,7 @@ class MlxRuntime:
         max_tokens: int = 300,
         temperature: float = 0.7,
         top_p: float = 1.0,
-        stop: list[str] | None = None,
+        prompt_cache: Any = None,
     ) -> Iterator[str]:
         """Generate text as a token stream."""
         if not self.is_loaded:
@@ -97,6 +109,7 @@ class MlxRuntime:
             max_tokens=max_tokens,
             temp=temperature,
             top_p=top_p,
+            prompt_cache=prompt_cache,
         ):
             yield token
 

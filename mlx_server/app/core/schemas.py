@@ -72,7 +72,6 @@ class GenerationParams(ApiModel):
     maxTokens: int = Field(default=300, ge=1, le=8192)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     topP: float = Field(default=1.0, gt=0.0, le=1.0)
-    stop: list[str] = Field(default_factory=list)
 
 
 class ChatRequest(ApiModel):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from mlx_server.app.core.schemas import ChatMessage
 
@@ -11,6 +11,7 @@ class SessionState:
     session_id: str
     messages: list[ChatMessage] = field(default_factory=list)
     model_id: Optional[str] = None
+    prompt_cache: Any = None
 
 
 class SessionStore:

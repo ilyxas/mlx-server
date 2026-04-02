@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mlx_server.app.api.errors import AppError
@@ -17,6 +18,14 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
         content={"ok": False, "error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={"ok": False, "error": {"code": "INVALID_REQUEST", "message": str(exc)}},
     )
 
 

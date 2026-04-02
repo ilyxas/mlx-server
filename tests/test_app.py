@@ -178,6 +178,9 @@ class TestChat:
     def test_chat_invalid_request(self, client):
         resp = client.post("/chat", json={"sessionId": "s1", "messages": []})
         assert resp.status_code == 422
+        data = resp.json()
+        assert data["ok"] is False
+        assert data["error"]["code"] == "INVALID_REQUEST"
 
     def test_chat_stream_no_model(self, client):
         resp = client.post(
@@ -210,6 +213,65 @@ class TestChat:
         assert resp.status_code == 200
         assert "Hello" in resp.text
 
+    def test_chat_stream_saves_session(self, client):
+        _load_fake_model()
+
+        def fake_stream(**kwargs):
+            yield "Hello"
+            yield " world"
+
+        with patch(
+            "mlx_server.app.runtime.mlx_runtime.mlx_runtime.stream_generate",
+            side_effect=fake_stream,
+        ):
+            resp = client.post(
+                "/chat/stream",
+                json={
+                    "sessionId": "stream-sess",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+        assert resp.status_code == 200
+
+        from mlx_server.app.runtime.session_store import session_store
+        session = session_store.get("stream-sess")
+        assert session is not None
+        assert len(session.messages) == 2
+        assert session.messages[0].role == "user"
+        assert session.messages[0].content == "Hi"
+        assert session.messages[1].role == "assistant"
+        assert session.messages[1].content == "Hello world"
+
+    def test_chat_session_cache_reset_on_model_change(self, client):
+        """Session cache is invalidated when a different model is loaded."""
+        _load_fake_model()
+
+        with patch("mlx_server.app.runtime.mlx_runtime.mlx_runtime.generate") as mock_gen:
+            mock_gen.return_value = "First response"
+            client.post(
+                "/chat",
+                json={"sessionId": "cache-sess", "messages": [{"role": "user", "content": "Hello"}]},
+            )
+
+        from mlx_server.app.runtime.session_store import session_store
+        session = session_store.get("cache-sess")
+        assert session is not None
+        assert session.model_id == "llama32_3b_4bit"
+
+        # Simulate switching to a different model
+        from mlx_server.app.runtime.mlx_runtime import mlx_runtime as rt
+        rt._current_repo = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+
+        with patch("mlx_server.app.runtime.mlx_runtime.mlx_runtime.generate") as mock_gen:
+            mock_gen.return_value = "Second response"
+            client.post(
+                "/chat",
+                json={"sessionId": "cache-sess", "messages": [{"role": "user", "content": "Hello again"}]},
+            )
+
+        session = session_store.get("cache-sess")
+        assert session.model_id == "qwen25_7b_4bit"
+
 
 # ---------------------------------------------------------------------------
 # Session reset
@@ -224,19 +286,57 @@ class TestSession:
         assert data["sessionId"] == "demo-1"
         assert data["cleared"] is True
 
+    def test_reset_clears_cache(self, client):
+        """Resetting a session wipes its prompt cache and message history."""
+        _load_fake_model()
+
+        with patch("mlx_server.app.runtime.mlx_runtime.mlx_runtime.generate") as mock_gen:
+            mock_gen.return_value = "reply"
+            client.post(
+                "/chat",
+                json={"sessionId": "r1", "messages": [{"role": "user", "content": "Hello"}]},
+            )
+
+        from mlx_server.app.runtime.session_store import session_store
+        session = session_store.get("r1")
+        assert session is not None
+        assert len(session.messages) == 2
+
+        client.post("/session/reset", json={"sessionId": "r1"})
+
+        session = session_store.get("r1")
+        assert session is not None
+        assert session.messages == []
+        assert session.prompt_cache is None
+        assert session.model_id is None
+
 
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
 class TestSchemas:
+    def test_stop_param_not_accepted(self, client):
+        """stop is removed from the public API — extra fields are forbidden."""
+        resp = client.post(
+            "/chat",
+            json={
+                "sessionId": "s1",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "params": {"stop": ["\\n"]},
+            },
+        )
+        assert resp.status_code == 422
+        data = resp.json()
+        assert data["ok"] is False
+        assert data["error"]["code"] == "INVALID_REQUEST"
+
     def test_generation_params_defaults(self):
         from mlx_server.app.core.schemas import GenerationParams
         p = GenerationParams()
         assert p.maxTokens == 300
         assert p.temperature == 0.7
         assert p.topP == 1.0
-        assert p.stop == []
 
     def test_chat_message_empty_content_invalid(self):
         from mlx_server.app.core.schemas import ChatMessage
